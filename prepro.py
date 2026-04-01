@@ -162,7 +162,7 @@ def read_chemdisgene(args, file_in, tokenizer, max_seq_length=1024, lower=True):
                     re_fre[mention["relation"]] += 1
                 relation[mention["relation"] + 1] = 1
                 evidence = mention["evidence"]
-                
+
             relations.append(relation)
             hts.append([entity2id[h], entity2id[t]])
 
@@ -179,7 +179,7 @@ def read_chemdisgene(args, file_in, tokenizer, max_seq_length=1024, lower=True):
                         neg[(entity_type[h], entity_type[t])] = 1
                     else:
                         neg[(entity_type[h], entity_type[t])] += 1
-                    
+
                     relation = [1] + [0] * (len(ctd_rel2id))
                     relations.append(relation)
                     hts.append([entity2id[h], entity2id[t]])

@@ -2,7 +2,7 @@ from cProfile import label
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from opt_einsum import contract
+# from opt_einsum import contract
 from long_seq import process_long_input
 import numpy as np
 
@@ -88,7 +88,10 @@ class DocREModel(nn.Module):
             t_att = torch.index_select(entity_atts, 0, ht_i[:, 1])
             ht_att = (h_att * t_att).mean(1)
             ht_att = ht_att / (ht_att.sum(1, keepdim=True) + 1e-5)
-            rs = contract("ld,rl->rd", sequence_output[i], ht_att)
+
+            rs = torch.einsum("ld,rl->rd", sequence_output[i], ht_att)
+            # rs = contract("ld,rl->rd", sequence_output[i], ht_att)
+
             hss.append(hs)
             tss.append(ts)
             rss.append(rs)
@@ -100,7 +103,7 @@ class DocREModel(nn.Module):
 
     def square_loss(self, yPred, yTrue, margin=1.):
         if len(yPred) == 0:
-            return torch.FloatTensor([0]).cuda()
+            return torch.FloatTensor([0]).to(yPred.device)
         loss = 0.25 * (yPred * yTrue - margin) ** 2
         return torch.mean(loss.sum() / yPred.shape[0])
 
@@ -125,10 +128,10 @@ class DocREModel(nn.Module):
         if labels is not None:
             labels = [torch.tensor(label) for label in labels]
             labels = torch.cat(labels, dim=0).to(logits)
-            
-            risk_sum = torch.FloatTensor([0]).cuda()
+
+            risk_sum = torch.FloatTensor([0]).to(logits.device)
             for i in range(self.rels):
-                
+
                 if self.args.isrank:
                     neg = (logits[(labels[:, i + 1] != 1), i + 1] - logits[(labels[:, i + 1] != 1), 0])
                     pos = (logits[(labels[:, i + 1] == 1), i + 1] - logits[(labels[:, i + 1] == 1), 0])
@@ -142,10 +145,10 @@ class DocREModel(nn.Module):
                     # risk2 = P(+)_risk
                     risk2 = self.priors_o[i] * self.square_loss(pos, 1., self.margin) * self.weight[i]
                     risk = risk1 + risk2
-                    
+
                 elif self.args.m_tag == 'S-PU':
                     priors_u = (self.priors_o[i] - self.priors_l[i]) / (1. - self.priors_l[i])
-                    risk1 = (((1. - self.priors_o[i]) / (1. - priors_u)) * self.square_loss(neg, -1., self.margin) - 
+                    risk1 = (((1. - self.priors_o[i]) / (1. - priors_u)) * self.square_loss(neg, -1., self.margin) -
                                 ((priors_u - priors_u * self.priors_o[i]) / (1. - priors_u)) * self.square_loss(pos, -1., self.margin))
 
                     risk2 = self.priors_o[i] * self.square_loss(pos, 1., self.margin) * self.weight[i]
@@ -169,4 +172,3 @@ class DocREModel(nn.Module):
             return risk_sum, logits
 
         return logits
-

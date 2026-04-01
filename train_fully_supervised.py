@@ -3,14 +3,15 @@ import os
 
 import numpy as np
 import torch
-from apex import amp
+# from apex import amp
 import ujson as json
 from torch.utils.data import DataLoader
 from transformers import AutoConfig, AutoModel, AutoTokenizer
-from transformers.optimization import AdamW, get_linear_schedule_with_warmup
+from transformers.optimization import get_linear_schedule_with_warmup
+from torch.optim import AdamW
 from tqdm import tqdm
 from model import DocREModel
-from utils import set_seed, collate_fn
+from utils import set_seed, collate_fn, load_cache, save_cache
 from prepro import read_docred
 from evaluation import official_evaluate, to_official
 
@@ -40,11 +41,12 @@ def train(args, model, train_features, dev_features):
 
                 outputs = model(**inputs)
                 loss = outputs[0] / args.gradient_accumulation_steps
-                with amp.scale_loss(loss, optimizer) as scaled_loss:
-                    scaled_loss.backward()
+                loss.backward()
+                # with amp.scale_loss(loss, optimizer) as scaled_loss:
+                #     scaled_loss.backward()
                 if step % args.gradient_accumulation_steps == 0:
                     if args.max_grad_norm > 0:
-                        torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
                     optimizer.step()
                     scheduler.step()
                     model.zero_grad()
@@ -73,7 +75,7 @@ def train(args, model, train_features, dev_features):
     ]
 
     optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
-    model, optimizer = amp.initialize(model, optimizer, opt_level="O1", verbosity=0)
+    # model, optimizer = amp.initialize(model, optimizer, opt_level="O1", verbosity=0)
     num_steps = 0
     set_seed(args)
     model.zero_grad()
@@ -163,6 +165,7 @@ def main():
     parser.add_argument("--test_file", default="test.json", type=str)
     parser.add_argument("--save_path", default="out", type=str)
     parser.add_argument("--load_path", default="", type=str)
+    parser.add_argument("--cache_path", default="dataset/cache.pkl")
 
     parser.add_argument("--config_name", default="", type=str,
                         help="Pretrained config name or path if not the same as model_name")
@@ -234,9 +237,22 @@ def main():
     train_file = os.path.join(args.data_dir, args.train_file)
     dev_file = os.path.join(args.data_dir, args.dev_file)
     test_file = os.path.join(args.data_dir, args.test_file)
-    train_features, priors = read(args, train_file, tokenizer, max_seq_length=args.max_seq_length)
-    dev_features, _ = read(args, dev_file, tokenizer, max_seq_length=args.max_seq_length)
-    test_features, _ = read(args, test_file, tokenizer, max_seq_length=args.max_seq_length)
+    if os.path.exists(args.cache_path):
+        cache_data = load_cache(args.cache_path)
+        train_features, priors = cache_data["train_features"], cache_data["priors"]
+        dev_features = cache_data["dev_features"]
+        test_features = cache_data["test_features"]
+    else:
+        train_features, priors = read(args, train_file, tokenizer, max_seq_length=args.max_seq_length)
+        dev_features, _ = read(args, dev_file, tokenizer, max_seq_length=args.max_seq_length)
+        test_features, _ = read(args, test_file, tokenizer, max_seq_length=args.max_seq_length)
+        cache_data = {
+            "train_features": train_features,
+            "dev_features": dev_features,
+            "test_features": test_features,
+            "priors": priors
+        }
+        save_cache(cache_data, args.cache_path)
 
     model = AutoModel.from_pretrained(
         args.model_name_or_path,
@@ -250,7 +266,8 @@ def main():
 
     set_seed(args)
     model = DocREModel(args, config, priors, priors * args.e, model)
-    model.to(0)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
 
     print(args.m_tag, args.isrank)
 
@@ -258,7 +275,7 @@ def main():
         train(args, model, train_features, dev_features)
 
         print("TEST")
-        model = amp.initialize(model, opt_level="O1", verbosity=0)
+        # model = amp.initialize(model, opt_level="O1", verbosity=0)
         model.load_state_dict(torch.load(args.save_path))
         test_score, test_output = evaluate(args, model, test_features, tag="test")
         print(test_output)
@@ -266,9 +283,9 @@ def main():
     else:  # Testing
         args.load_path = os.path.join(args.load_path, file_name)
         print(args.load_path)
-        
+
         print("TEST")
-        model = amp.initialize(model, opt_level="O1", verbosity=0)
+        # model = amp.initialize(model, opt_level="O1", verbosity=0)
         model.load_state_dict(torch.load(args.load_path))
         test_score, test_output = evaluate(args, model, test_features, tag="test")
         print(test_output)

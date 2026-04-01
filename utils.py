@@ -1,6 +1,8 @@
 import torch
 import random
 import numpy as np
+import pickle as pkl
+
 
 
 def set_seed(args):
@@ -22,3 +24,12 @@ def collate_fn(batch):
     input_mask = torch.tensor(input_mask, dtype=torch.float)
     output = (input_ids, input_mask, labels, entity_pos, hts)
     return output
+
+def load_cache(path):
+    with open(path, 'rb') as file:
+        loadded_data = pkl.load(file)
+    return loadded_data
+
+def save_cache(data, path):
+    with open(path, 'wb') as file:
+        pkl.dump(data, file)
