@@ -1,8 +1,9 @@
 #!/bin/sh
 
 python train_fully_supervised.py --data_dir ./dataset/docred \
+    --use_wandb 1 \
     --transformer_type roberta \
-    --model_name_or_path ../../pretrain/Roberta-large \
+    --model_name_or_path roberta-large \
     --train_file train_revised.json \
     --dev_file dev_revised.json \
     --test_file test_revised.json \

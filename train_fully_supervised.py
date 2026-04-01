@@ -9,15 +9,27 @@ from torch.utils.data import DataLoader
 from transformers import AutoConfig, AutoModel, AutoTokenizer
 from transformers.optimization import get_linear_schedule_with_warmup
 from torch.optim import AdamW
-from tqdm import tqdm
 from model import DocREModel
 from utils import set_seed, collate_fn, load_cache, save_cache
 from prepro import read_docred
 from evaluation import official_evaluate, to_official
+import wandb
+# import omegaconf
+
+
+def init_wandb(cfg):
+    if cfg.use_wandb == 1:
+        run = wandb.init(
+            entity="triyn01052004-vietnam-national-university-hanoi",
+            project="RR-RE",
+            config = cfg
+        )
+        return run
+    return None
 
 
 def train(args, model, train_features, dev_features):
-    def finetune(features, optimizer, num_epoch, num_steps):
+    def finetune(features, optimizer, num_epoch, num_steps, wdb_run=None):
         best_score = -1
         best_dev_output = None
         train_dataloader = DataLoader(features, batch_size=args.train_batch_size, shuffle=True, collate_fn=collate_fn, drop_last=True)
@@ -27,9 +39,10 @@ def train(args, model, train_features, dev_features):
         scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps)
         print("Total steps: {}".format(total_steps))
         print("Warmup steps: {}".format(warmup_steps))
-        for epoch in tqdm(train_iterator):
+        freq_loss = 0.0
+        for epoch in train_iterator:
             model.zero_grad()
-            for step, batch in enumerate(tqdm(train_dataloader)):
+            for step, batch in enumerate(train_dataloader):
                 model.train()
 
                 inputs = {'input_ids': batch[0].to(args.device),
@@ -42,8 +55,10 @@ def train(args, model, train_features, dev_features):
                 outputs = model(**inputs)
                 loss = outputs[0] / args.gradient_accumulation_steps
                 loss.backward()
+                freq_loss += loss.item()
                 # with amp.scale_loss(loss, optimizer) as scaled_loss:
                 #     scaled_loss.backward()
+
                 if step % args.gradient_accumulation_steps == 0:
                     if args.max_grad_norm > 0:
                         torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
@@ -51,13 +66,20 @@ def train(args, model, train_features, dev_features):
                     scheduler.step()
                     model.zero_grad()
                     num_steps += 1
+                    if num_steps % 100 == 0 and num_steps != 0:
+                        print(f"{num_steps}: loss= {freq_loss / 100}")
+                        if wdb_run is not None: wdb_run.log({"loss": freq_loss / 100}, num_steps)
+                        freq_loss = 0.0
 
                 if (step + 1) == len(train_dataloader) - 1 or (args.evaluation_steps > 0 and num_steps % args.evaluation_steps == 0 and step % args.gradient_accumulation_steps == 0):
                     print("training risk:", loss.item(), "   step:", num_steps)
 
                     avg_val_risk = cal_val_risk(args, model, dev_features)
                     print('avg val risk:', avg_val_risk)
+                    if wdb_run is not None: wdb_run.log({"avg_val_risk": avg_val_risk}, num_steps)
+
                     dev_score, dev_output = evaluate(args, model, dev_features, tag="dev")
+                    if wdb_run is not None: wdb_run.log(dev_output, num_steps)
                     print(dev_output, '\n')
 
                     if dev_score > best_score:
@@ -79,7 +101,9 @@ def train(args, model, train_features, dev_features):
     num_steps = 0
     set_seed(args)
     model.zero_grad()
-    finetune(train_features, optimizer, args.num_train_epochs, num_steps)
+    wdb_run = init_wandb(args)
+    finetune(train_features, optimizer, args.num_train_epochs, num_steps, wdb_run=wdb_run)
+    return wdb_run
 
 def cal_val_risk(args, model, features):
 
@@ -146,9 +170,12 @@ def evaluate(args, model, features, tag="test"):
         }
     else:
         best_f1, best_f1_ign = -1, -1
+        re_p, re_r = -1, -1
         output = {
             tag + "_F1": best_f1 * 100,
             tag + "_F1_ign": best_f1_ign * 100,
+            "re_p": re_p * 100,
+            "re_r": re_r * 100,
         }
     return best_f1, output
 
@@ -203,6 +230,8 @@ def main():
     parser.add_argument('--gamma', type=float, default=1.0, help='gamma of pu learning (default 1.0)')
     parser.add_argument('--m', type=float, default=1.0, help='margin')
     parser.add_argument('--e', type=float, default=3.0, help='estimated a priors multiple')
+
+    parser.add_argument("--use_wandb", type=int, default=0)
 
     args = parser.parse_args()
 
@@ -272,12 +301,13 @@ def main():
     print(args.m_tag, args.isrank)
 
     if args.load_path == "":  # Training
-        train(args, model, train_features, dev_features)
+        wdb_run = train(args, model, train_features, dev_features)
 
         print("TEST")
         # model = amp.initialize(model, opt_level="O1", verbosity=0)
         model.load_state_dict(torch.load(args.save_path))
         test_score, test_output = evaluate(args, model, test_features, tag="test")
+        if wdb_run is not None: wdb_run.log(test_output, 0)
         print(test_output)
 
     else:  # Testing

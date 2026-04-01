@@ -1,3 +1,4 @@
 transformers==4.57.3
 ujson
 unidecode
+wandb
