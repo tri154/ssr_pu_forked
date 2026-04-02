@@ -5,6 +5,7 @@ import torch.nn.functional as F
 # from opt_einsum import contract
 from long_seq import process_long_input
 import numpy as np
+from rr import RRModel
 
 
 class DocREModel(nn.Module):
@@ -23,9 +24,10 @@ class DocREModel(nn.Module):
         else:
             self.rels = args.num_class
 
-        self.head_extractor = nn.Linear(2 * config.hidden_size, emb_size)
-        self.tail_extractor = nn.Linear(2 * config.hidden_size, emb_size)
-        self.bilinear = nn.Linear(emb_size * block_size, config.num_labels)
+        # self.head_extractor = nn.Linear(2 * config.hidden_size, emb_size)
+        # self.tail_extractor = nn.Linear(2 * config.hidden_size, emb_size)
+        # self.bilinear = nn.Linear(emb_size * block_size, config.num_labels)
+        self.rr_model = RRModel(hidden_size=config.hidden_size, num_class=config.num_labels)
 
         self.emb_size = emb_size
         self.block_size = block_size
@@ -118,12 +120,16 @@ class DocREModel(nn.Module):
         sequence_output, attention = self.encode(input_ids, attention_mask)
         hs, rs, ts = self.get_hrt(sequence_output, attention, entity_pos, hts)
 
-        hs = torch.tanh(self.head_extractor(torch.cat([hs, rs], dim=1)))    # zs
-        ts = torch.tanh(self.tail_extractor(torch.cat([ts, rs], dim=1)))    # zo
-        b1 = hs.view(-1, self.emb_size // self.block_size, self.block_size)
-        b2 = ts.view(-1, self.emb_size // self.block_size, self.block_size)
-        bl = (b1.unsqueeze(3) * b2.unsqueeze(2)).view(-1, self.emb_size * self.block_size)
-        logits = self.bilinear(bl)
+        logits = self.rr_model(hs, ts, rs)
+
+        # breakpoint()
+        # hs = torch.tanh(self.head_extractor(torch.cat([hs, rs], dim=1)))    # zs
+        # ts = torch.tanh(self.tail_extractor(torch.cat([ts, rs], dim=1)))    # zo
+        # b1 = hs.view(-1, self.emb_size // self.block_size, self.block_size)
+        # b2 = ts.view(-1, self.emb_size // self.block_size, self.block_size)
+        # bl = (b1.unsqueeze(3) * b2.unsqueeze(2)).view(-1, self.emb_size * self.block_size)
+        # logits = self.bilinear(bl)
+        # breakpoint()
 
         if labels is not None:
             labels = [torch.tensor(label) for label in labels]
