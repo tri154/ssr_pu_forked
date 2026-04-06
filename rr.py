@@ -92,7 +92,7 @@ class RRModel(nn.Module):
         expansion=4,
         num_tokens=64,
         rope_theta=10000.0,
-        single_net=True,
+        single_net=False,
         use_mlp=True,
         dropout_rate=0.1,
     ):
@@ -149,13 +149,13 @@ class RRModel(nn.Module):
             num_tokens=self.num_tokens,
         )
 
-        dims = [self.hidden_size * 3 , self.hidden_size * 2, self.hidden_size]
-        self.down_proj = nn.ModuleList(
-            [CastedLinear(dims[i], dims[i + 1], bias=False) for i in range(len(dims) - 1)]
-        )
-        self.dropout = nn.Dropout(self.dropout_rate)
+        # dims = [self.hidden_size * 3 , self.hidden_size * 2, self.hidden_size]
+        # self.down_proj = nn.ModuleList(
+        #     [CastedLinear(dims[i], dims[i + 1], bias=False) for i in range(len(dims) - 1)]
+        # )
+        # self.dropout = nn.Dropout(self.dropout_rate)
 
-        self.classify_head = CastedLinear(self.hidden_size, self.num_class, bias=False)
+        # self.classify_head = CastedLinear(self.hidden_size, self.num_class, bias=False)
 
 
     def forward_down_proj(self, zh):
@@ -206,13 +206,10 @@ class RRModel(nn.Module):
         ts,
         rs
     ):
-        rel_emb = torch.cat([hs, ts, rs], dim=1)
+        rel_emb = torch.cat([hs, rs, ts], dim=1)
         rel_emb = rel_emb.view(rel_emb.shape[0], self.num_tokens, -1)
 
         zh, zl = self.recursive_reasoning(rel_emb)
         zh = zh.view(zh.shape[0], -1)
 
-        features = self.forward_down_proj(zh.view(zh.shape[0], -1))
-        logits = self.classify_head(features)
-
-        return logits
+        return zh
