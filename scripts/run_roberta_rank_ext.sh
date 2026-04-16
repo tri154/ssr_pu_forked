@@ -1,8 +1,9 @@
 #!/bin/sh
 
 python train.py --data_dir ./dataset/docred \
+    --use_wandb 1 \
     --transformer_type roberta \
-    --model_name_or_path ../../pretrain/Roberta-large \
+    --model_name_or_path roberta-large \
     --train_file train_ext.json \
     --dev_file dev_ext.json \
     --test_file test_revised.json \
@@ -13,7 +14,7 @@ python train.py --data_dir ./dataset/docred \
     --max_grad_norm 1.0 \
     --warmup_ratio 0.06 \
     --num_train_epochs 30.0 \
-    --seed 66 \
+    --seed 65 \
     --num_class 97 \
     --isrank 1 \
     --m_tag S-PU \
