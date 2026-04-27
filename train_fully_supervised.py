@@ -15,7 +15,8 @@ from prepro import read_docred
 from evaluation import official_evaluate, to_official
 import wandb
 # import omegaconf
-
+from ema import EMAHelper
+import copy
 
 def init_wandb(cfg):
     if cfg.use_wandb == 1:
@@ -37,6 +38,8 @@ def train(args, model, train_features, dev_features):
         total_steps = int(len(train_dataloader) * num_epoch // args.gradient_accumulation_steps)
         warmup_steps = int(total_steps * args.warmup_ratio)
         scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps, num_training_steps=total_steps)
+        ema_helper = EMAHelper(mu=0.999)
+        ema_helper.register(model)
         print("Total steps: {}".format(total_steps))
         print("Warmup steps: {}".format(warmup_steps))
         freq_loss = 0.0
@@ -65,6 +68,7 @@ def train(args, model, train_features, dev_features):
                     optimizer.step()
                     scheduler.step()
                     model.zero_grad()
+                    ema_helper.update(model)
                     num_steps += 1
                     if num_steps % 100 == 0 and num_steps != 0:
                         print(f"{num_steps}: loss= {freq_loss / 100}")
@@ -74,18 +78,20 @@ def train(args, model, train_features, dev_features):
                 if (step + 1) == len(train_dataloader) - 1 or (args.evaluation_steps > 0 and num_steps % args.evaluation_steps == 0 and step % args.gradient_accumulation_steps == 0):
                     print("training risk:", loss.item(), "   step:", num_steps)
 
-                    avg_val_risk = cal_val_risk(args, model, dev_features)
-                    print('avg val risk:', avg_val_risk)
-                    if wdb_run is not None: wdb_run.log({"avg_val_risk": avg_val_risk}, num_steps)
+                    # avg_val_risk = cal_val_risk(args, model, dev_features)
+                    # print('avg val risk:', avg_val_risk)
+                    # if wdb_run is not None: wdb_run.log({"avg_val_risk": avg_val_risk}, num_steps)
 
-                    dev_score, dev_output = evaluate(args, model, dev_features, tag="dev")
+                    eval_model = copy.deepcopy(model)
+                    eval_model = ema_helper.ema_copy(eval_model)
+                    dev_score, dev_output = evaluate(args, eval_model, dev_features, tag="dev")
                     if wdb_run is not None: wdb_run.log(dev_output, num_steps)
                     print(dev_output, '\n')
 
                     if dev_score > best_score:
                         best_score = dev_score
                         best_dev_output = dev_output
-                        torch.save(model.state_dict(), args.save_path)
+                        torch.save(eval_model.state_dict(), args.save_path)
 
         print('best dev f1:', best_dev_output)
         return num_steps
